@@ -1,33 +1,96 @@
 package mr
 
-import "log"
+import (
+	"fmt"
+	"log"
+	"sort"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 
-
 type Coordinator struct {
-	// Your definitions here.
+	TotalMapJobs        int
+	MapJobs             []*Job
+	IntermediateOutputs []*[]KeyValue
 
+	TotalReduceJobs int
+	ReduceJobs      []*Job
 }
 
-// Your code here -- RPC handlers for the worker to call.
+// for sorting by key.
+type ByKey []KeyValue
 
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
+//------- RPC handlers
+
+// AssignMapJob assigns each worker an input file to process
+// receive intermediate maps from workers and store in Job struct
+func (c *Coordinator) AssignMapJob(args *MapJobArgs, reply *MapJobReply) error {
+	job := c.getNextJob("map")
+	if job == nil {
+		log.Println("No more map jobs available!")
+		return nil
+	}
+	reply.File = job.File
+
+	// update tracker that a job was assigned
+	job.Status = StatusInProgress
 	return nil
 }
 
+func (c *Coordinator) getNextJob(jobType string) *Job {
+	if jobType == "map" {
+		for _, job := range c.MapJobs {
+			if job.Status == StatusNotStarted {
+				return job
+			}
+		}
+	} else if jobType == "reduce" {
+		for _, job := range c.ReduceJobs {
+			if job.Status == StatusNotStarted {
+				return job
+			}
+		}
+	}
+	return nil
+}
 
-//
+func (c *Coordinator) FinishMapJob(args *MapJobArgs, reply *MapJobReply) error {
+	filename := args.File
+	for _, job := range c.MapJobs {
+		if job.File == filename {
+			job.Status = StatusDone
+			c.IntermediateOutputs = append(c.IntermediateOutputs, args.IntermediateOutput)
+
+			// confirm with worker we've marked this job done
+			reply.Status = StatusDone
+		}
+	}
+	return nil
+}
+
+func (c *Coordinator) AssignReduceJobs() error {
+	// once all map jobs are done
+	// sort each slice of KVs
+	// partition each slice of KVs into nReduce tasks
+	for _, output := range c.IntermediateOutputs {
+		// does this work?
+		sort.Sort(ByKey(*output))
+	}
+
+	var partitions [][]KeyValue
+	// todo bucket the intermediate outputs into p buckets
+
+	return nil
+}
+
 // start a thread that listens for RPCs from worker.go
-//
 func (c *Coordinator) server() {
 	rpc.Register(c)
 	rpc.HandleHTTP()
@@ -39,31 +102,35 @@ func (c *Coordinator) server() {
 		log.Fatal("listen error:", e)
 	}
 	go http.Serve(l, nil)
+	log.Println("coordinator is listening...")
 }
 
-//
-// main/mrcoordinator.go calls Done() periodically to find out
-// if the entire job has finished.
-//
+// Done called by main/mrcoordinator.go periodically to find out if the entire job has finished.
 func (c *Coordinator) Done() bool {
-	ret := false
+	for _, job := range c.MapJobs {
+		if job.Status == StatusNotStarted || job.Status == StatusInProgress {
+			return false
+		}
+	}
 
-	// Your code here.
-
-
-	return ret
+	return true
 }
 
-//
-// create a Coordinator.
+// MakeCoordinator create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
-//
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
-	// Your code here.
+	// track map jobs and their status
+	c.TotalMapJobs = len(files)
+	for _, file := range files {
+		c.MapJobs = append(c.MapJobs, &Job{File: file, Status: StatusNotStarted})
+	}
+	// todo track reduce jobs
+	c.TotalReduceJobs = nReduce
 
+	fmt.Printf("There are %d map jobs, and %d reduce jobs\n", c.TotalMapJobs, c.TotalReduceJobs)
 
 	c.server()
 	return &c
