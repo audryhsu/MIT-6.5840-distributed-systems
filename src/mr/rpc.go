@@ -1,29 +1,19 @@
 package mr
 
-//
 // RPC definitions.
-//
-// remember to capitalize all names.
-//
 
 import "os"
 import "strconv"
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
+type MapJobReply struct {
+	File   string
+	Status Status
 }
-
-type ExampleReply struct {
-	Y int
+type MapJobArgs struct {
+	File string
+	// stored on local worker, so pass it the memory address
+	IntermediateOutput *[]KeyValue
 }
-
-// Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
