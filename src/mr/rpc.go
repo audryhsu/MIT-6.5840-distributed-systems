@@ -6,13 +6,15 @@ import "os"
 import "strconv"
 
 type MapJobReply struct {
-	File   string
-	Status Status
+	Job     *Job
+	NReduce int
 }
 type MapJobArgs struct {
 	File string
 	// stored on local worker, so pass it the memory address
 	IntermediateOutput *[]KeyValue
+	IntermediateFile string
+}
 }
 
 // Cook up a unique-ish UNIX-domain socket name
