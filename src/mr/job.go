@@ -1,9 +1,10 @@
 package mr
 
+type Status string
 type Job struct {
-	File   string
-	Status Status // not started, done, in progress ?
-	//IntermediateOutput *[]KeyValue
+	File       string // either the input file to map, or the intermediate output file for reduce
+	Status     Status // not started, done, in progress ?
+	TaskNumber int
 }
 type Status string
 

@@ -10,5 +10,6 @@ coordinator:
 	go run mrcoordinator.go pg-*.txt
 
 worker:
+	rm mr-out*
 	go build -buildmode=plugin ../mrapps/wc.go
 	go run mrworker.go wc.so

@@ -1,9 +1,11 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"time"
 )
 import "log"
 import "net/rpc"
@@ -16,6 +18,14 @@ type KeyValue struct {
 	Value string
 }
 
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
+
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
 func ihash(key string) int {
@@ -24,23 +34,30 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-// Worker is called by main/mrworker.go
+// Worker asks for a job to work on or waits for the next one
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// todo make RPC call to coordinator to get a task
-	GetMapJob(mapf)
+	for {
+		doMap(mapf)
+		time.Sleep(3 * time.Second)
+	}
+	//doReduce(reducef)
 
 }
 
-func GetMapJob(mapf func(string, string) []KeyValue) {
+// doMap
+// read input file and pass contents to mapf
+// loop over []kv and encode and write each kv to intermediate outputfile based on ihash
+// tell coordinator done and location of intermediate output
+func doMap(mapf func(string, string) []KeyValue) {
 	reply := &MapJobReply{}
-	ok := call("Coordinator.AssignMapJob", &MapJobArgs{}, &reply)
-	if !ok {
-		log.Panic("RPC failed: couldn't get map job")
+	if ok := call("Coordinator.AssignMapJob", &MapJobArgs{}, &reply); !ok {
+		log.Println("No map job available")
+		return
 	}
-	fmt.Printf("reply.File %s\n", reply.File)
-	filename := reply.File
+	filename := reply.Job.File
+	log.Printf("reply.InputFile %s\n", filename)
 
 	// get contents of file and pass to mapf
 	f, err := os.Open(filename)
@@ -56,26 +73,41 @@ func GetMapJob(mapf func(string, string) []KeyValue) {
 	kvSlice := mapf(filename, string(content))
 	fmt.Printf("read %d words from %s\n", len(kvSlice), filename)
 
-	// send Coordinator memory address of intermediate ds
-	a := MapJobArgs{
-		IntermediateOutput: &kvSlice,
-		File:               reply.File,
+	// iterate over kv slices and organize into reduce partitions
+	intermediate := make([][]KeyValue, reply.NReduce)
+	for _, kv := range kvSlice {
+		reduceTaskNumber := ihash(kv.Key) % reply.NReduce
+		intermediate[reduceTaskNumber] = append(intermediate[reduceTaskNumber], kv)
 	}
-	r := MapJobReply{}
-	ok = call("Coordinator.FinishMapJob", &a, &r)
-	if !ok {
+
+	// store intermediate kvs in files that can be read back during reduce tasks
+	ioFilename := fmt.Sprintf("mr-%d-%d", reply.Job.TaskNumber, reply.NReduce)
+	// for each reduce partition, create a temp file
+	for _, p := range intermediate {
+		ioFile, err := os.CreateTemp("", ioFilename)
+		defer ioFile.Close()
+		enc := json.NewEncoder(ioFile)
+		// for each kv in a partition, write to file
+		for _, kv := range p {
+			if err := enc.Encode(&kv); err != nil {
+				log.Fatalf("couldn't encode KV to partition %v\n", err)
+			}
+		}
+		err = os.Rename(ioFile.Name(), ioFilename)
+		if err != nil {
+			log.Fatalf("error renaming file %s\n", ioFilename)
+		}
+	}
+
+	// does this update the reference?
+	reply.Job.Status = StatusDone
+	log.Printf("Worker updated %s job with status %s\n", filename, reply.Job.Status)
+
+	arg := reply
+	if ok := call("Coordinator.FinishMapJob", &arg, &MapJobReply{}); !ok {
 		log.Panic("RPC failed: couldn't finish map job")
 	}
 
-	fmt.Printf("Coordinator updated %s job with status %s\n", filename, r.Status)
-
-}
-func Reduce(reducef func(string, []string) string) {
-	// todo ask for a reduce job
-	// sort the intermediateOutput slice of kvs by key
-	// iterate over kvs and pass kvs to reduce function for each unique k
-	// write reduce output to a file
-	// tell Coord job is done
 }
 
 // CallExample example function to show how to make an RPC call to the coordinator.

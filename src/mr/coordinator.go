@@ -3,7 +3,6 @@ package mr
 import (
 	"fmt"
 	"log"
-	"sort"
 )
 import "net"
 import "os"
@@ -11,21 +10,16 @@ import "net/rpc"
 import "net/http"
 
 type Coordinator struct {
-	TotalMapJobs        int
-	MapJobs             []*Job
-	IntermediateOutputs []*[]KeyValue
+	TotalMapJobs       int
+	MapJobs            []*Job
+	IntermediateOutput []KeyValue
+
+	MapAllDone bool
 
 	TotalReduceJobs int
 	ReduceJobs      []*Job
+	OutputFile      *os.File
 }
-
-// for sorting by key.
-type ByKey []KeyValue
-
-// for sorting by key.
-func (a ByKey) Len() int           { return len(a) }
-func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
-func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //------- RPC handlers
 
@@ -34,12 +28,11 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func (c *Coordinator) AssignMapJob(args *MapJobArgs, reply *MapJobReply) error {
 	job := c.getNextJob("map")
 	if job == nil {
-		log.Println("No more map jobs available!")
-		return nil
+		log.Println("Coordinator: No more map jobs available!")
+		return fmt.Errorf("No more map jobs available!")
 	}
-	reply.File = job.File
-
-	// update tracker that a job was assigned
+	reply.Job = job
+	reply.NReduce = c.TotalReduceJobs
 	job.Status = StatusInProgress
 	return nil
 }
@@ -61,15 +54,12 @@ func (c *Coordinator) getNextJob(jobType string) *Job {
 	return nil
 }
 
-func (c *Coordinator) FinishMapJob(args *MapJobArgs, reply *MapJobReply) error {
-	filename := args.File
+func (c *Coordinator) FinishMapJob(args *MapJobReply, reply *MapJobReply) error {
+	filename := args.Job.File
 	for _, job := range c.MapJobs {
 		if job.File == filename {
 			job.Status = StatusDone
-			c.IntermediateOutputs = append(c.IntermediateOutputs, args.IntermediateOutput)
-
-			// confirm with worker we've marked this job done
-			reply.Status = StatusDone
+			log.Printf("updating map job %s status to:  %v\n", job.File, job.Status)
 		}
 	}
 	return nil
@@ -117,17 +107,18 @@ func (c *Coordinator) Done() bool {
 }
 
 // MakeCoordinator create a Coordinator.
-// main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{}
 
 	// track map jobs and their status
 	c.TotalMapJobs = len(files)
-	for _, file := range files {
-		c.MapJobs = append(c.MapJobs, &Job{File: file, Status: StatusNotStarted})
+	for i, file := range files {
+		c.MapJobs = append(c.MapJobs, &Job{File: file, Status: StatusNotStarted, TaskNumber: i})
 	}
-	// todo track reduce jobs
+	c.MapAllDone = false
+
+	c.ReduceJobs = make([]*Job, nReduce)
 	c.TotalReduceJobs = nReduce
 
 	fmt.Printf("There are %d map jobs, and %d reduce jobs\n", c.TotalMapJobs, c.TotalReduceJobs)
