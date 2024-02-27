@@ -2,11 +2,14 @@ package mr
 
 type Status string
 type Job struct {
-	File       string // either the input file to map, or the intermediate output file for reduce
-	Status     Status // not started, done, in progress ?
+	JobType    string
+	InputFile  string // input file for map
+	Status     Status // not started, done, in progress
 	TaskNumber int
+
+	InputFiles []string // input files for reduce
+	OutputFile string   // final output files
 }
-type Status string
 
 const (
 	StatusInProgress Status = "in progress"
