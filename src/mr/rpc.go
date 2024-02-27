@@ -5,16 +5,12 @@ package mr
 import "os"
 import "strconv"
 
-type MapJobReply struct {
+type RequestJobReply struct {
 	Job     *Job
 	NReduce int
 }
-type MapJobArgs struct {
-	File string
-	// stored on local worker, so pass it the memory address
-	IntermediateOutput *[]KeyValue
-	IntermediateFile string
-}
+type RequestJobArgs struct {
+	Job *Job
 }
 
 // Cook up a unique-ish UNIX-domain socket name
