@@ -44,15 +44,20 @@ func Worker(mapf func(string, string) []KeyValue,
 		reply := &RequestJobReply{}
 		arg := &RequestJobArgs{}
 		if ok := call("Coordinator.AssignJob", &arg, &reply); !ok {
-			log.Println("No job available")
-			return
+			log.Printf("No response from coordinator available")
+			break
 		}
 
-		switch reply.Job.JobType {
-		case "map":
-			doMap(mapf, reply)
-		case "reduce":
-			doReduce(reducef, reply)
+		if reply.Job != nil {
+			switch reply.Job.JobType {
+			case "map":
+				doMap(mapf, reply)
+			case "reduce":
+				doReduce(reducef, reply)
+			}
+
+		} else {
+			log.Println("Coordinator reply didn't return a job")
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -65,7 +70,7 @@ func Worker(mapf func(string, string) []KeyValue,
 // tell coordinator done and location of intermediate output
 func doMap(mapf func(string, string) []KeyValue, reply *RequestJobReply) {
 	filename := reply.Job.InputFile
-	log.Printf("%s task: %s\n", reply.Job.JobType, filename)
+	log.Printf("worker received %s task: %s\n", reply.Job.JobType, filename)
 
 	// get contents of file and pass to mapf
 	f, err := os.Open(filename)
@@ -107,7 +112,7 @@ func doMap(mapf func(string, string) []KeyValue, reply *RequestJobReply) {
 	}
 
 	reply.Job.Status = StatusDone
-	log.Printf("%s: %s\n", reply.Job.Status, filename)
+	log.Printf("worker %s: %s\n", reply.Job.Status, filename)
 
 	arg := &RequestJobArgs{
 		Job: reply.Job,
@@ -124,7 +129,7 @@ func doMap(mapf func(string, string) []KeyValue, reply *RequestJobReply) {
 // create final output file
 // run reduce for each unique key and write to outputfile
 func doReduce(reducef func(string, []string) string, reply *RequestJobReply) {
-	log.Printf("reduce task: %d\n", reply.Job.TaskNumber)
+	log.Printf("worker received reduce task: %d\n", reply.Job.TaskNumber)
 	// for each inputfile, read in intermediate kvs from filesystem into a slice
 	intermediate := []KeyValue{}
 	for _, filename := range reply.Job.InputFiles {
@@ -175,7 +180,7 @@ func doReduce(reducef func(string, []string) string, reply *RequestJobReply) {
 	if ok := call("Coordinator.NotifyJobComplete", reply, &RequestJobReply{}); !ok {
 		log.Panic("RPC failed: couldn't finish reduce job")
 	}
-	log.Printf("%s: %d\n", reply.Job.Status, reply.Job.TaskNumber)
+	log.Printf("worker %s reduce task: %d\n", reply.Job.Status, reply.Job.TaskNumber)
 }
 
 // send an RPC request to the coordinator, wait for the response.
@@ -186,7 +191,6 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	if err != nil {
 		log.Fatal("dialing:", err)
 	}
-	defer c.Close()
 
 	err = c.Call(rpcname, args, reply)
 	if err == nil {

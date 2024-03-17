@@ -3,6 +3,7 @@ package mr
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 )
 import "net"
@@ -11,6 +12,7 @@ import "net/rpc"
 import "net/http"
 
 type Coordinator struct {
+	mu           sync.Mutex
 	TotalMapJobs int
 	MapJobs      []*Job
 
@@ -22,59 +24,70 @@ type Coordinator struct {
 }
 
 func (c *Coordinator) AssignJob(args *RequestJobArgs, reply *RequestJobReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	// keep assigning map jobs until all done
-	var selectedJob *Job
 	if !c.MapAllDone {
+		count := 0
+
 		for _, job := range c.MapJobs {
 			if job.Status == StatusNotStarted {
-				selectedJob = job
-				reply.Job = selectedJob
+				reply.Job = job
 				reply.NReduce = c.TotalReduceJobs
-				selectedJob.Status = StatusInProgress
+				job.Status = StatusInProgress
 
-				log.Printf("Assigning map job %s to worker\n", selectedJob.InputFile)
+				log.Printf("Assigning map job %s to worker\n", job.InputFile)
+
+				// start a thread that waits 10 seconds and checks if assigned task got finished
+				go c.WaitForJob(job)
 				return nil
+			} else if job.Status == StatusDone {
+				count++
 			}
 		}
-		// sleep, then if any are still in progress, move back to "not started queue
-		time.Sleep(10 * time.Second)
-		for _, job := range c.MapJobs {
-			if job.Status == StatusInProgress {
-				log.Printf("Move %s job back to queue\n", job.InputFile)
-				job.Status = StatusNotStarted
-			}
+		if count == c.TotalMapJobs {
+			c.MapAllDone = true
+			log.Printf(" ----> All map jobs are done, now assigning reduce jobs\n")
 		}
-	}
-
-	// check if maps are all done, remaining might all in in progress
-	count := 0
-	for _, job := range c.MapJobs {
-		if job.Status == StatusDone {
-			count++
-		}
-	}
-	if count == c.TotalMapJobs {
-		c.MapAllDone = true
-	} else {
-		return fmt.Errorf("No more map jobs to assign, but not done yet")
 	}
 
 	if c.MapAllDone {
-		log.Printf("All map jobs are done, now assigning reduce jobs\n")
+		count := 0
 		for _, job := range c.ReduceJobs {
 			if job.Status == StatusNotStarted {
-				selectedJob = job
-				reply.Job = selectedJob
-				log.Printf("Assigning reduce job %d to worker\n", selectedJob.TaskNumber)
+				reply.Job = job
+				log.Printf("Assigning reduce job %d to worker\n", job.TaskNumber)
+
+				go c.WaitForJob(job)
+
 				return nil
+			} else if job.Status == StatusDone {
+				count++
 			}
 		}
+		if count == c.TotalReduceJobs {
+			c.ReduceAllDone = true
+		}
 	}
-	c.ReduceAllDone = true
 
 	return nil
 }
+func (c *Coordinator) WaitForJob(job *Job) {
+	<-time.After(10 * time.Second)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// if any are still in progress, move back to "not started" queue
+	if job.Status == StatusInProgress {
+		log.Printf("%s job still not done, move back to todo queue", job.InputFile)
+		job.Status = StatusNotStarted
+	}
+
+}
 func (c *Coordinator) NotifyJobComplete(args *RequestJobArgs, reply *RequestJobReply) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	job := args.Job
 	switch job.JobType {
 	case "map":
@@ -83,6 +96,25 @@ func (c *Coordinator) NotifyJobComplete(args *RequestJobArgs, reply *RequestJobR
 		c.ReduceJobs[job.TaskNumber].Status = StatusDone
 	}
 	return nil
+}
+
+// Done called by main/mrcoordinator.go periodically to find out if the entire job has finished.
+func (c *Coordinator) Done() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for _, job := range c.MapJobs {
+		if job.Status == StatusNotStarted || job.Status == StatusInProgress {
+			return false
+		}
+	}
+
+	for _, job := range c.ReduceJobs {
+		if job.Status == StatusNotStarted || job.Status == StatusInProgress {
+			return false
+		}
+	}
+	return true
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -98,22 +130,6 @@ func (c *Coordinator) server() {
 	}
 	go http.Serve(l, nil)
 	log.Println("coordinator is listening...")
-}
-
-// Done called by main/mrcoordinator.go periodically to find out if the entire job has finished.
-func (c *Coordinator) Done() bool {
-	for _, job := range c.MapJobs {
-		if job.Status == StatusNotStarted || job.Status == StatusInProgress {
-			return false
-		}
-	}
-
-	for _, job := range c.ReduceJobs {
-		if job.Status == StatusNotStarted || job.Status == StatusInProgress {
-			return false
-		}
-	}
-	return true
 }
 
 // MakeCoordinator create a Coordinator.
