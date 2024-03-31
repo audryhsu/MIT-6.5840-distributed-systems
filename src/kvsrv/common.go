@@ -1,5 +1,7 @@
 package kvsrv
 
+// todo implement system to unique identify client operations
+//
 // Put or Append
 type PutAppendArgs struct {
 	Key   string
