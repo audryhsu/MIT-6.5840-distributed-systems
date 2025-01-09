@@ -2,14 +2,12 @@ package kvsrv
 
 import (
 	"6.5840/labrpc"
-	"log"
 )
 import "crypto/rand"
 import "math/big"
 
 type Clerk struct {
 	server *labrpc.ClientEnd
-	// You will have to modify this struct.
 }
 
 func nrand() int64 {
@@ -22,7 +20,6 @@ func nrand() int64 {
 func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.server = server
-	// You'll have to add code here.
 	return ck
 }
 
@@ -37,7 +34,7 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
-	args := GetArgs{Key: key}
+	args := GetArgs{Key: key, RequestId: nrand()}
 	reply := GetReply{}
 
 	// retry Get until succeeds
@@ -48,7 +45,7 @@ func (ck *Clerk) Get(key string) string {
 			break
 		}
 
-		log.Printf("Clerk.Get(%s): RPC failed, retrying...\n", key)
+		//log.Printf("Id: %d\nClerk.Get(%s): RPC failed, retrying...\n", args.RequestId, key)
 	}
 
 	return reply.Value
@@ -64,8 +61,9 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	args := PutAppendArgs{
-		Key:   key,
-		Value: value,
+		Key:       key,
+		Value:     value,
+		RequestId: nrand(),
 	}
 	reply := PutAppendReply{}
 	var ok bool
@@ -74,7 +72,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) string {
 		if ok {
 			break
 		}
-		log.Printf("Clerk.%s(%s, %s): RPC failed. retrying...\n", op, key, value)
+		//log.Printf("Id: %d\nClerk.%s(%s, %s): RPC failed. retrying...\n", args.RequestId, op, key, value)
 	}
 
 	return reply.Value
